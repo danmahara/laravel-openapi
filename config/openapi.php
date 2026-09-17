@@ -22,6 +22,10 @@ return [
     // Where `php artisan openapi:generate` writes the static spec file.
     'output_path' => storage_path('app/openapi.json'),
 
+    // Override/extend exact middleware mappings; [] disables detection for a name.
+    // Example: 'auth' => ['session' => ['type' => 'apiKey', 'in' => 'cookie', 'name' => 'laravel_session']]
+    'middleware_security' => [],
+
     'security_schemes' => [
         'bearerAuth' => [
             'type' => 'http',

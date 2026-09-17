@@ -3,10 +3,13 @@
 namespace Danmahara\LaravelOpenApi\Discovery;
 
 use Closure;
+use Illuminate\Container\Container;
 use Illuminate\Contracts\Container\BindingResolutionException;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Http\Resources\Json\JsonResource;
 use Illuminate\Routing\Route;
+use Illuminate\Routing\Router;
+use Illuminate\Support\Arr;
 use ReflectionFunction;
 use ReflectionFunctionAbstract;
 use ReflectionMethod;
@@ -14,7 +17,7 @@ use ReflectionNamedType;
 use ReflectionType;
 use ReflectionUnionType;
 
-/** Reflects registered actions without constructing controllers or running actions. */
+/** Reflects actions without executing them; middleware inspection may construct controllers. */
 class RouteDiscovery
 {
     public function action(Route $route): ?ReflectionFunctionAbstract
@@ -39,15 +42,42 @@ class RouteDiscovery
     }
 
     /** Controller dependencies may be unavailable outside an HTTP request. */
-    public function middleware(Route $route): array
+    public function middleware(Route $route, ?Router $router = null): array
     {
+        // Gather separately: gatherMiddleware() caches an empty array before resolving
+        // the controller, leaving that cache empty if construction throws.
+        $middleware = $route->middleware();
         try {
-            $middleware = $route->gatherMiddleware();
+            $middleware = array_merge($middleware, $route->controllerMiddleware());
         } catch (BindingResolutionException) {
-            $middleware = $route->middleware();
+            // Keep route/group metadata and allow controller resolution to be retried.
         }
 
-        return array_values(array_diff($middleware, $route->excludedMiddleware()));
+        $middleware = Router::uniqueMiddleware(Arr::flatten($middleware));
+        $excluded = Arr::flatten($route->excludedMiddleware());
+        if ($excluded === []) {
+            return $middleware;
+        }
+
+        // The generator supplies its router; direct callers can use Laravel's binding.
+        $container = Container::getInstance();
+        $router ??= $container->bound('router') ? $container->make('router') : null;
+        if ($router !== null) {
+            // Use Laravel's alias, parameter and class-inheritance exclusion semantics,
+            // but keep named groups opaque and do not mutate the application's router.
+            $router = clone $router;
+            $router->flushMiddlewareGroups();
+        }
+
+        return array_values(array_filter($middleware, function ($name) use ($router, $excluded) {
+            if ($name instanceof Closure) {
+                return true;
+            }
+
+            return $router !== null
+                ? $router->resolveMiddleware([$name], $excluded) !== []
+                : ! in_array($name, $excluded, true);
+        }));
     }
 
     /** @return list<class-string<FormRequest>> */

@@ -42,7 +42,7 @@ Route groups and resource routes work through Laravel's registered route table.
 URI parameters are included automatically; optional `{id?}` becomes `{id}`
 with `required: true`, as OpenAPI requires for path parameters.
 Route/group and controller middleware names are exposed as
-`x-laravel-middleware`; they do not automatically imply an authentication scheme.
+`x-laravel-middleware`; recognized authentication middleware also adds OpenAPI security.
 Middleware aliases/groups remain unexpanded. If the container cannot resolve a
 controller dependency, only route/group middleware is available.
 
@@ -85,6 +85,64 @@ Then either:
 Both routes and the output path are configurable in `config/openapi.php`,
 including which route URI patterns to include/exclude (`include`/`exclude`,
 matched with Laravel's `Str::is()` wildcard patterns).
+
+## Automatic authentication detection
+
+Authentication middleware on discovered routes, route groups, and controllers
+adds operation security and a reusable component automatically:
+
+```php
+Route::middleware('auth:sanctum')
+    ->get('api/users', [UserController::class, 'index']);
+```
+
+```yaml
+paths:
+  /api/users:
+    get:
+      security:
+        - sanctum: []
+components:
+  securitySchemes:
+    sanctum:
+      type: http
+      scheme: bearer
+```
+
+The built-in mappings are `auth:sanctum` → `sanctum`, `auth:api` → `api`,
+and `auth` → `auth`, all using HTTP bearer authentication. These are documentation
+defaults: Laravel guards can use other mechanisms, and Sanctum can also use
+session cookies. The package does not inspect guard drivers or execute auth.
+Public routes receive no security requirement. Repeated schemes and identical
+requirements are deduplicated. Separate recognized middleware are required
+together (OpenAPI AND semantics).
+
+Class or method `#[ApiSecurity(name: 'customScheme')]` attributes replace automatic
+detection for that operation; define those schemes in `security_schemes`.
+Existing class and method attributes remain combined. Configured
+`security_schemes` definitions take precedence over inferred definitions.
+
+Extend or override exact middleware mappings in `config/openapi.php`, without
+changing route discovery. For example, to document bare `auth` as session auth:
+
+```php
+'middleware_security' => [
+    'auth' => [
+        'session' => ['type' => 'apiKey', 'in' => 'cookie', 'name' => 'laravel_session'],
+    ],
+    'custom-token' => [
+        'token' => ['type' => 'http', 'scheme' => 'bearer'],
+    ],
+    'auth:api' => [], // Disable automatic detection for this middleware.
+],
+```
+
+Matching uses the middleware names returned by route discovery. Custom aliases,
+nested middleware groups, class names, and multi-guard strings such as
+`auth:sanctum,api` need an explicit mapping or security attributes. Excluded
+middleware exclusions use Laravel’s alias and class resolution, while named
+middleware groups remain unexpanded. Controller middleware is unavailable if controller dependencies
+cannot be resolved.
 
 ## Attributes
 

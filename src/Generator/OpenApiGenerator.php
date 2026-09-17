@@ -10,6 +10,7 @@ use Danmahara\LaravelOpenApi\Attributes\ApiResponse;
 use Danmahara\LaravelOpenApi\Attributes\ApiSecurity;
 use Danmahara\LaravelOpenApi\Attributes\ApiTag;
 use Danmahara\LaravelOpenApi\Discovery\RouteDiscovery;
+use Danmahara\LaravelOpenApi\Discovery\MiddlewareSecurityResolver;
 use Danmahara\LaravelOpenApi\SchemaInference\FormRequestSchemaBuilder;
 use Danmahara\LaravelOpenApi\SchemaInference\ResourceSchemaBuilder;
 use Illuminate\Routing\Route;
@@ -33,6 +34,8 @@ class OpenApiGenerator
     {
         $paths = [];
         $tags = [];
+        $securitySchemes = $this->config['security_schemes'] ?? [];
+        $securityResolver = new MiddlewareSecurityResolver($this->config['middleware_security'] ?? []);
 
         foreach ($this->router->getRoutes() as $route) {
             if (! $this->shouldInclude($route)) {
@@ -51,6 +54,15 @@ class OpenApiGenerator
 
             $reflectionClass = $reflectionMethod instanceof ReflectionMethod ? $reflectionMethod->getDeclaringClass() : null;
             $operation = $this->buildOperation($reflectionClass, $reflectionMethod, $route);
+            if (! isset($operation['security'])) {
+                $detectedSchemes = $securityResolver->resolve($operation['x-laravel-middleware'] ?? []);
+                if ($detectedSchemes !== []) {
+                    // Multiple middleware run together, so these requirements are ANDed.
+                    $operation['security'] = [array_fill_keys(array_keys($detectedSchemes), [])];
+                }
+                // Configured definitions always win over inferred defaults.
+                $securitySchemes += $detectedSchemes;
+            }
             $path = $this->normalizePath($route->uri());
 
             foreach ($route->methods() as $httpMethod) {
@@ -81,7 +93,7 @@ class OpenApiGenerator
             'tags' => array_values(array_map(fn ($name) => ['name' => $name], $tags)),
             'paths' => $paths,
             'components' => [
-                'securitySchemes' => $this->config['security_schemes'] ?? [],
+                'securitySchemes' => $securitySchemes,
             ],
         ];
     }
@@ -131,7 +143,7 @@ class OpenApiGenerator
             'operationId' => $operation->operationId ?? ($class ? $class->getShortName().'::'.$method->getName() : ($route->getName() ?? 'Closure::'.$route->uri())),
             'tags' => $tags,
             'deprecated' => $operation->deprecated ?: null,
-            'x-laravel-middleware' => (new RouteDiscovery())->middleware($route),
+            'x-laravel-middleware' => (new RouteDiscovery())->middleware($route, $this->router),
             'parameters' => $this->buildParameters($method, $route),
             'requestBody' => $this->buildRequestBody($method),
             'responses' => $this->buildResponses($method) ?: ['200' => ['description' => 'Successful response']],
@@ -248,7 +260,10 @@ class OpenApiGenerator
         foreach ($attrs as $attr) {
             /** @var ApiSecurity $sec */
             $sec = $attr->newInstance();
-            $security[] = [$sec->name => $sec->scopes];
+            $requirement = [$sec->name => $sec->scopes];
+            if (! in_array($requirement, $security, true)) {
+                $security[] = $requirement;
+            }
         }
 
         return $security;
