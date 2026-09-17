@@ -14,6 +14,12 @@ jobs:
       matrix:
         include:
           - php: '8.2'
+            laravel: '10.*'
+            testbench: '8.*'
+          - php: '8.3'
+            laravel: '10.*'
+            testbench: '8.*'
+          - php: '8.2'
             laravel: '11.*'
             testbench: '9.*'
           - php: '8.3'
@@ -42,6 +48,9 @@ jobs:
         with:
           php-version: ${{ matrix.php }}
           coverage: none
+
+      - name: Allow security-advisory-affected versions (compatibility testing only — nothing is deployed)
+        run: composer config policy.advisories.block false
 
       - name: Install dependencies
         run: |
