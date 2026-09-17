@@ -38,7 +38,7 @@ class OpenApiGenerator
         $securityResolver = new MiddlewareSecurityResolver($this->config['middleware_security'] ?? []);
 
         foreach ($this->router->getRoutes() as $route) {
-            if (! $this->shouldInclude($route)) {
+            if (!$this->shouldInclude($route)) {
                 continue;
             }
 
@@ -54,7 +54,7 @@ class OpenApiGenerator
 
             $reflectionClass = $reflectionMethod instanceof ReflectionMethod ? $reflectionMethod->getDeclaringClass() : null;
             $operation = $this->buildOperation($reflectionClass, $reflectionMethod, $route);
-            if (! isset($operation['security'])) {
+            if (!isset($operation['security'])) {
                 $detectedSchemes = $securityResolver->resolve($operation['x-laravel-middleware'] ?? []);
                 if ($detectedSchemes !== []) {
                     // Multiple middleware run together, so these requirements are ANDed.
@@ -68,7 +68,7 @@ class OpenApiGenerator
             foreach ($route->methods() as $httpMethod) {
                 $httpMethod = strtolower($httpMethod);
 
-                if (! in_array($httpMethod, ['get', 'post', 'put', 'patch', 'delete', 'options'], true)) {
+                if (!in_array($httpMethod, ['get', 'post', 'put', 'patch', 'delete', 'options'], true)) {
                     continue;
                 }
 
@@ -90,7 +90,7 @@ class OpenApiGenerator
                 'description' => $this->config['description'] ?? '',
             ]),
             'servers' => $this->config['servers'] ?? [],
-            'tags' => array_values(array_map(fn ($name) => ['name' => $name], $tags)),
+            'tags' => array_values(array_map(fn($name) => ['name' => $name], $tags)),
             'paths' => $paths,
             'components' => [
                 'securitySchemes' => $securitySchemes,
@@ -100,6 +100,10 @@ class OpenApiGenerator
 
     private function shouldInclude(Route $route): bool
     {
+        if (in_array($route->getName(), ['openapi.ui', 'openapi.spec'], true)) {
+            return false;
+        }
+
         $includePrefixes = $this->config['include'] ?? ['api/*'];
         $excludePrefixes = $this->config['exclude'] ?? [];
         $uri = $route->uri();
@@ -140,7 +144,7 @@ class OpenApiGenerator
             // Reflected closure names can contain source locations.
             'summary' => $operation->summary ?: ($class ? $method->getName() : $this->normalizePath($route->uri())),
             'description' => $operation->description,
-            'operationId' => $operation->operationId ?? ($class ? $class->getShortName().'::'.$method->getName() : ($route->getName() ?? 'Closure::'.$route->uri())),
+            'operationId' => $operation->operationId ?? ($class ? $class->getShortName() . '::' . $method->getName() : ($route->getName() ?? 'Closure::' . $route->uri())),
             'tags' => $tags,
             'deprecated' => $operation->deprecated ?: null,
             'x-laravel-middleware' => (new RouteDiscovery())->middleware($route, $this->router),
@@ -148,7 +152,7 @@ class OpenApiGenerator
             'requestBody' => $this->buildRequestBody($method),
             'responses' => $this->buildResponses($method) ?: ['200' => ['description' => 'Successful response']],
             'security' => $this->buildSecurity($class, $method) ?: null,
-        ], fn ($v) => $v !== null && $v !== []);
+        ], fn($v) => $v !== null && $v !== []);
 
         return $result;
     }
@@ -160,7 +164,7 @@ class OpenApiGenerator
         preg_match_all('/\{([^}?:]+)(?:\?)?\}/', $route->uri(), $matches);
 
         foreach ($matches[1] as $name) {
-            $parameters['path:'.$name] = [
+            $parameters['path:' . $name] = [
                 'name' => $name,
                 'in' => 'path',
                 'required' => true,
@@ -178,14 +182,14 @@ class OpenApiGenerator
                 $schema['enum'] = $param->enum;
             }
 
-            $parameters[$param->in.':'.$param->name] = array_filter([
+            $parameters[$param->in . ':' . $param->name] = array_filter([
                 'name' => $param->name,
                 'in' => $param->in,
                 'required' => $param->in === 'path' ? true : $param->required,
                 'description' => $param->description ?: null,
                 'schema' => $schema,
                 'example' => $param->example,
-            ], fn ($v) => $v !== null && $v !== '');
+            ], fn($v) => $v !== null && $v !== '');
         }
 
         return array_values($parameters);
@@ -196,7 +200,7 @@ class OpenApiGenerator
         $attr = $method->getAttributes(ApiRequestBody::class)[0] ?? null;
 
         $requests = (new RouteDiscovery())->formRequests($method);
-        if (! $attr && count($requests) !== 1) {
+        if (!$attr && count($requests) !== 1) {
             return null;
         }
 
@@ -261,7 +265,7 @@ class OpenApiGenerator
             /** @var ApiSecurity $sec */
             $sec = $attr->newInstance();
             $requirement = [$sec->name => $sec->scopes];
-            if (! in_array($requirement, $security, true)) {
+            if (!in_array($requirement, $security, true)) {
                 $security[] = $requirement;
             }
         }
@@ -271,7 +275,7 @@ class OpenApiGenerator
 
     private function normalizePath(string $uri): string
     {
-        $path = '/'.ltrim($uri, '/');
+        $path = '/' . ltrim($uri, '/');
 
         return preg_replace('/\{([a-zA-Z0-9_]+)\??\}/', '{$1}', $path);
     }
