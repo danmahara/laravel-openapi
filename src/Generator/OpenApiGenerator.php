@@ -9,12 +9,14 @@ use Danmahara\LaravelOpenApi\Attributes\ApiRequestBody;
 use Danmahara\LaravelOpenApi\Attributes\ApiResponse;
 use Danmahara\LaravelOpenApi\Attributes\ApiSecurity;
 use Danmahara\LaravelOpenApi\Attributes\ApiTag;
+use Danmahara\LaravelOpenApi\Discovery\RouteDiscovery;
 use Danmahara\LaravelOpenApi\SchemaInference\FormRequestSchemaBuilder;
 use Danmahara\LaravelOpenApi\SchemaInference\ResourceSchemaBuilder;
 use Illuminate\Routing\Route;
 use Illuminate\Routing\Router;
 use Illuminate\Support\Str;
 use ReflectionClass;
+use ReflectionFunctionAbstract;
 use ReflectionMethod;
 
 class OpenApiGenerator
@@ -37,25 +39,17 @@ class OpenApiGenerator
                 continue;
             }
 
-            $action = $this->resolveControllerAction($route);
+            $reflectionMethod = (new RouteDiscovery())->action($route);
 
-            if ($action === null) {
+            if ($reflectionMethod === null) {
                 continue;
             }
-
-            [$controllerClass, $methodName] = $action;
-
-            if (! method_exists($controllerClass, $methodName)) {
-                continue;
-            }
-
-            $reflectionMethod = new ReflectionMethod($controllerClass, $methodName);
 
             if ($reflectionMethod->getAttributes(ApiExclude::class) !== []) {
                 continue;
             }
 
-            $reflectionClass = $reflectionMethod->getDeclaringClass();
+            $reflectionClass = $reflectionMethod instanceof ReflectionMethod ? $reflectionMethod->getDeclaringClass() : null;
             $operation = $this->buildOperation($reflectionClass, $reflectionMethod, $route);
             $path = $this->normalizePath($route->uri());
 
@@ -113,37 +107,13 @@ class OpenApiGenerator
         return false;
     }
 
-    /**
-     * @return array{0: class-string, 1: string}|null
-     */
-    private function resolveControllerAction(Route $route): ?array
-    {
-        $action = $route->getAction('uses');
-
-        if (is_string($action) && str_contains($action, '@')) {
-            return explode('@', $action, 2);
-        }
-
-        $controller = $route->getController();
-
-        if ($controller !== null) {
-            $actionMethod = $route->getActionMethod();
-
-            if ($actionMethod && $actionMethod !== 'Closure') {
-                return [get_class($controller), $actionMethod];
-            }
-        }
-
-        return null; // Closures carry no reflectable attributes and aren't documented.
-    }
-
-    private function buildOperation(ReflectionClass $class, ReflectionMethod $method, Route $route): array
+    private function buildOperation(?ReflectionClass $class, ReflectionFunctionAbstract $method, Route $route): array
     {
         $operationAttr = $method->getAttributes(ApiOperation::class)[0] ?? null;
         /** @var ApiOperation $operation */
         $operation = $operationAttr ? $operationAttr->newInstance() : new ApiOperation();
 
-        $classTagAttr = $class->getAttributes(ApiTag::class)[0] ?? null;
+        $classTagAttr = $class?->getAttributes(ApiTag::class)[0] ?? null;
         $tags = $operation->tags;
 
         if (empty($tags) && $classTagAttr) {
@@ -151,15 +121,16 @@ class OpenApiGenerator
         }
 
         if (empty($tags)) {
-            $tags = [$class->getShortName()];
+            $tags = [$class?->getShortName() ?? 'Closure'];
         }
 
         $result = array_filter([
             'summary' => $operation->summary ?: $method->getName(),
             'description' => $operation->description,
-            'operationId' => $operation->operationId ?? ($class->getShortName().'::'.$method->getName()),
+            'operationId' => $operation->operationId ?? ($class ? $class->getShortName().'::'.$method->getName() : ($route->getName() ?? 'Closure::'.$route->uri())),
             'tags' => $tags,
             'deprecated' => $operation->deprecated ?: null,
+            'x-laravel-middleware' => (new RouteDiscovery())->middleware($route),
             'parameters' => $this->buildParameters($method, $route),
             'requestBody' => $this->buildRequestBody($method),
             'responses' => $this->buildResponses($method) ?: ['200' => ['description' => 'Successful response']],
@@ -169,12 +140,14 @@ class OpenApiGenerator
         return $result;
     }
 
-    private function buildParameters(ReflectionMethod $method, Route $route): array
+    private function buildParameters(ReflectionFunctionAbstract $method, Route $route): array
     {
         $parameters = [];
 
-        foreach ($route->parameterNames() as $name) {
-            $parameters[] = [
+        preg_match_all('/\{([^}?:]+)(?:\?)?\}/', $route->uri(), $matches);
+
+        foreach ($matches[1] as $name) {
+            $parameters['path:'.$name] = [
                 'name' => $name,
                 'in' => 'path',
                 'required' => true,
@@ -192,7 +165,7 @@ class OpenApiGenerator
                 $schema['enum'] = $param->enum;
             }
 
-            $parameters[] = array_filter([
+            $parameters[$param->in.':'.$param->name] = array_filter([
                 'name' => $param->name,
                 'in' => $param->in,
                 'required' => $param->in === 'path' ? true : $param->required,
@@ -202,19 +175,20 @@ class OpenApiGenerator
             ], fn ($v) => $v !== null && $v !== '');
         }
 
-        return $parameters;
+        return array_values($parameters);
     }
 
-    private function buildRequestBody(ReflectionMethod $method): ?array
+    private function buildRequestBody(ReflectionFunctionAbstract $method): ?array
     {
         $attr = $method->getAttributes(ApiRequestBody::class)[0] ?? null;
 
-        if (! $attr) {
+        $requests = (new RouteDiscovery())->formRequests($method);
+        if (! $attr && count($requests) !== 1) {
             return null;
         }
 
         /** @var ApiRequestBody $body */
-        $body = $attr->newInstance();
+        $body = $attr ? $attr->newInstance() : new ApiRequestBody(formRequest: $requests[0]);
 
         $schema = $body->schema
             ?? ($body->formRequest ? $this->formRequestBuilder->build($body->formRequest) : ['type' => 'object']);
@@ -228,7 +202,7 @@ class OpenApiGenerator
         ];
     }
 
-    private function buildResponses(ReflectionMethod $method): array
+    private function buildResponses(ReflectionFunctionAbstract $method): array
     {
         $responses = [];
 
@@ -251,14 +225,21 @@ class OpenApiGenerator
             ];
         }
 
+        if ($responses === [] && ($resource = (new RouteDiscovery())->resource($method))) {
+            $responses['200'] = [
+                'description' => 'Successful response',
+                'content' => ['application/json' => ['schema' => $this->resourceBuilder->build($resource)]],
+            ];
+        }
+
         return $responses;
     }
 
-    private function buildSecurity(ReflectionClass $class, ReflectionMethod $method): array
+    private function buildSecurity(?ReflectionClass $class, ReflectionFunctionAbstract $method): array
     {
         $attrs = array_merge(
             $method->getAttributes(ApiSecurity::class),
-            $class->getAttributes(ApiSecurity::class)
+            $class?->getAttributes(ApiSecurity::class) ?? []
         );
 
         $security = [];

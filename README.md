@@ -17,7 +17,47 @@ php artisan vendor:publish --tag=openapi-config
 
 ## Usage
 
-Add attributes to controller methods:
+Routes registered with Laravel's `Route` facade (or router) are discovered
+at generation time. No attributes are required:
+
+```php
+use Illuminate\Support\Facades\Route;
+
+Route::middleware('auth:sanctum')->post('api/users', [UserController::class, 'store']);
+
+class UserController extends Controller
+{
+    public function store(StoreUserRequest $request): UserResource
+    {
+        return new UserResource(User::create($request->validated()));
+    }
+}
+```
+
+This generates a POST operation at `/api/users`, infers the request schema
+from `StoreUserRequest`, and a default 200 response schema from `UserResource`.
+GET, POST, PUT, PATCH, DELETE and OPTIONS are supported; HEAD is omitted.
+Controller methods, invokable controllers, and closures are supported.
+Route groups and resource routes work through Laravel's registered route table.
+URI parameters are included automatically; optional `{id?}` becomes `{id}`
+with `required: true`, as OpenAPI requires for path parameters.
+Route/group and controller middleware names are exposed as
+`x-laravel-middleware`; they do not automatically imply an authentication scheme.
+Middleware aliases/groups remain unexpanded. If the container cannot resolve a
+controller dependency, only route/group middleware is available.
+
+A single FormRequest type hint and a single JsonResource return type (including
+nullable types) enable inference. Ambiguous types require explicit attributes.
+Actions are never executed. Resource inference uses the existing heuristic and
+does not infer collection item types, response wrapping, or HTTP status codes.
+Use explicit attributes for these details, including a 201 creation response.
+
+Attributes customize the discovered operation. Explicit request bodies and
+responses take precedence over type hints; an explicit parameter replaces the
+inferred parameter with the same name and location. `ApiExclude` and configured
+include/exclude patterns still apply.
+
+For example, add attributes to controller methods:
 
 ```php
 use Danmahara\LaravelOpenApi\Attributes\{ApiOperation, ApiParameter, ApiRequestBody, ApiResponse, ApiTag};
@@ -97,15 +137,13 @@ composer install
 vendor/bin/phpunit
 ```
 
-`tests/Fixtures/` has a sample controller and FormRequest exercising the
-main code paths; `OpenApiGeneratorTest` asserts the generated paths, the
-schema inferred from the sample FormRequest's rules, and that `include`/
-`exclude` patterns are respected.
+The suite includes discovery unit tests and Laravel integration tests for
+automatic inference, middleware, closures, route filters, and manual metadata
+precedence. The CI matrix runs the suite on Laravel 10, 11, 12, and 13 with
+the corresponding Orchestra Testbench versions.
 
 ## Known limitations / roadmap
 
-- Closures aren't documented (no attributes to reflect on) — only
-  controller-class routes are picked up.
 - No support yet for `oneOf`/`allOf`/polymorphic resources.
 - No caching layer — regeneration walks the full route table each call.
   Fine for `artisan openapi:generate` in CI; for the live `/api/documentation.json`
