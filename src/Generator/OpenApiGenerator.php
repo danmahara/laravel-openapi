@@ -125,7 +125,8 @@ class OpenApiGenerator
         }
 
         $result = array_filter([
-            'summary' => $operation->summary ?: $method->getName(),
+            // Reflected closure names can contain source locations.
+            'summary' => $operation->summary ?: ($class ? $method->getName() : $this->normalizePath($route->uri())),
             'description' => $operation->description,
             'operationId' => $operation->operationId ?? ($class ? $class->getShortName().'::'.$method->getName() : ($route->getName() ?? 'Closure::'.$route->uri())),
             'tags' => $tags,

@@ -8,6 +8,28 @@ use Illuminate\Support\Facades\Route;
 
 class AutomaticDiscoveryTest extends TestCase
 {
+    public function test_closure_metadata_does_not_expose_source_locations(): void
+    {
+        Route::get('api/hello', fn () => 'Hello');
+        Route::get('api/named/{id?}', fn () => 'Hello')->name('hello.show');
+
+        $document = (new OpenApiGenerator($this->app['router']))->generate();
+        foreach ([
+            '/api/hello' => 'Closure::api/hello',
+            '/api/named/{id}' => 'hello.show',
+        ] as $path => $operationId) {
+            $this->assertSame(['get'], array_keys($document['paths'][$path]));
+            $operation = $document['paths'][$path]['get'];
+            $this->assertSame($path, $operation['summary']);
+            $this->assertSame($operationId, $operation['operationId']);
+            $this->assertSame(['Closure'], $operation['tags']);
+        }
+
+        $json = json_encode($document, JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR);
+        $this->assertStringNotContainsString(__FILE__, $json);
+        $this->assertStringNotContainsString('{closure', strtolower($json));
+    }
+
     public function test_all_methods_groups_parameters_and_middleware_are_discovered(): void
     {
         Route::prefix('api')->middleware('group-middleware')->group(function () {
@@ -16,6 +38,9 @@ class AutomaticDiscoveryTest extends TestCase
         $paths = (new OpenApiGenerator($this->app['router']))->generate()['paths'];
         $this->assertSame(['get', 'post', 'put', 'patch', 'delete', 'options'], array_keys($paths['/api/users/{id}']));
         foreach ($paths['/api/users/{id}'] as $operation) {
+            $this->assertSame('__invoke', $operation['summary']);
+            $this->assertSame('DiscoveredController::__invoke', $operation['operationId']);
+            $this->assertSame(['DiscoveredController'], $operation['tags']);
             $this->assertSame(['group-middleware', 'controller-middleware'], $operation['x-laravel-middleware']);
             $this->assertSame('id', $operation['parameters'][0]['name']);
             $this->assertTrue($operation['parameters'][0]['required']);
